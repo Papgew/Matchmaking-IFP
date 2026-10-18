@@ -120,3 +120,13 @@ Example trace for P002 under policy A:
 ## 8. Notes
 This solution follows a functional pipeline style, where the domain logic stays separate from file and console operations.
 
+
+## Assignment 6 — Handling Temporal Coupling
+
+**Before (unsafe conceptual example):** `Complete(match)` could calculate a result directly from an unconfirmed match. The caller had to remember to validate and confirm first. Omitting either step could publish an invalid rating.
+
+**After:** `ValidatedMatch.Create(raw)` checks nonempty PlayerId, nonnegative MMR/kills/deaths, and finite duration >= 3 minutes. Its constructor is private; only `ValidationOutcome.Valid` carries a validated value, while `Invalid` carries a reason. `MatchWorkflow.Start(validated)` creates `Pending`; `Confirm(Pending)` produces `Confirmed`; `Complete(Confirmed, policy)` produces `Completed` with the rating. Transitions use switch pattern matching. Attempts to complete Pending, confirm Completed, or repeat confirmation/completion return `TransitionOutcome.Rejected` with the original state unchanged. The app now uses this sequence for each parsed record. Invalid records are skipped with explicit reasons, preserving the Assignment 5 behavior of excluding invalid playable matches. The existing three-stage pipeline remains available for Assignment 5 tests; the new workflow reuses its rating and result stages.
+
+**Demonstration:** `dotnet run --project src/Matchmaking.App -- data/matches.csv both` (from repository root). Run `dotnet test` for Assignment 5 and 6 tests. SDK specified in `global.json`: .NET 8.0.100 with latestFeature roll-forward.
+
+**Tests added:** `WorkflowTests.cs`: factory valid boundary, duration rejection, negative kills, missing player, null record, missing confirmation, valid completion and MMR, repeated confirmation, repeated completion, and handling every state. Expected outcomes are asserted using xUnit. Run locally to verify actual results.

@@ -29,7 +29,29 @@ foreach (var name in names)
         Console.Error.WriteLine($"Unknown policy '{name}'. Use A, B or both.");
         return 2;
     }
-    var results = MatchmakingPipeline.Run(parsed.Matches, policy);
+    var completed = new List<PlayerMatchResult>();
+    foreach (var raw in parsed.Matches)
+    {
+        switch (MatchWorkflow.Validate(raw))
+        {
+            case ValidationOutcome.Invalid invalid:
+                Console.Error.WriteLine($"Skipped {raw.PlayerId}: {invalid.Reason}");
+                break;
+            case ValidationOutcome.Valid valid:
+                var pending = MatchWorkflow.Start(valid.Match);
+                var confirmation = MatchWorkflow.Confirm(pending);
+                if (confirmation is not TransitionOutcome.Success confirmed)
+                    throw new InvalidOperationException("Unexpected confirmation failure.");
+                var completion = MatchWorkflow.Complete(confirmed.State, policy);
+                if (completion is TransitionOutcome.Success { State: MatchState.Completed done })
+                    completed.Add(done.Result);
+                else
+                    throw new InvalidOperationException("Unexpected completion failure.");
+                break;
+        }
+    }
+    var results = completed.OrderByDescending(r => r.NewMmr)
+        .ThenBy(r => r.PlayerId, StringComparer.Ordinal).ToArray();
     Console.WriteLine($"=== Policy {name.ToUpperInvariant()} ({parsed.Matches.Length} parsed, {results.Length} accepted) ===");
     Console.WriteLine($"{"Player",-8}{"Old",6}{"Delta",7}{"New",6}  Rank");
     foreach (var r in results)
