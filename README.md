@@ -130,3 +130,35 @@ This solution follows a functional pipeline style, where the domain logic stays 
 **Demonstration:** `dotnet run --project src/Matchmaking.App -- data/matches.csv both` (from repository root). Run `dotnet test` for Assignment 5 and 6 tests. SDK specified in `global.json`: .NET 8.0.100 with latestFeature roll-forward.
 
 **Tests added:** `WorkflowTests.cs`: factory valid boundary, duration rejection, negative kills, missing player, null record, missing confirmation, valid completion and MMR, repeated confirmation, repeated completion, and handling every state. Expected outcomes are asserted using xUnit. Run locally to verify actual results.
+
+
+## Assignment 7 — Exception Handling in Functional Programming
+
+Assignment 7 builds on the existing Assignment 5 pipeline and Assignment 6 validated factory and state transitions.
+
+- `Result.cs` defines `Result<T>.Success`, `Result<T>.Failure(DomainError)`, `Map`, `Bind`, and `Option<T>.Some/None`. Failed operations bypass downstream callbacks.
+- `RatingWorkflow.cs` uses `Option` to find a player (including players with zero MMR) and `Result` to compose validation, confirmation, and completion. Domain errors include `PLAYER_NOT_FOUND`, `INVALID_MATCH`, and `INVALID_TRANSITION`.
+- `RateAll` returns either the complete sorted set of ratings or one failure; it does not publish partial batches.
+- `CsvDataLoader.cs` converts missing files, inaccessible files, I/O failures, and malformed CSV into explicit failures.
+- `Program.cs` handles the final result at the console boundary and prints actionable error codes.
+- `ResultWorkflowTests.cs` adds 12 xUnit tests for successful and failed chains, lookup, Map/Bind, file failures, and batch atomicity.
+
+### Before and after
+
+**Before:** file loading could throw, and workflow rejections were handled separately from pipeline composition.
+
+**After:** expected failures are represented as values, `Map` and `Bind` short-circuit failed computations, and invalid batches produce no partial results. The existing Assignment 5 and 6 code and tests remain.
+
+### Run
+
+```bash
+dotnet build Matchmaking.sln
+dotnet test Matchmaking.sln
+dotnet run --project src/Matchmaking.App -- data/matches.csv A
+dotnet run --project src/Matchmaking.App -- data/matches.csv A P001
+dotnet run --project src/Matchmaking.App -- data/matches.csv A UNKNOWN
+dotnet run --project src/Matchmaking.App -- data/invalid.csv A
+dotnet run --project src/Matchmaking.App -- data/not-found.csv A
+```
+
+Expected failures include `PLAYER_NOT_FOUND`, `MALFORMED_CSV`, and `FILE_NOT_FOUND`. Build and test execution must be verified in an environment with .NET 8 SDK.
