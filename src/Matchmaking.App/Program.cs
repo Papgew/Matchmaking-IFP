@@ -2,22 +2,15 @@ using Matchmaking.Core;
 
 var path = args.Length > 0 ? args[0] : "data/matches.csv";
 var mode = args.Length > 1 ? args[1] : "both";
+var playerId = args.Length > 2 ? args[2] : null;
 
-if (!File.Exists(path))
+var loaded = CsvDataLoader.Load(path);
+if (loaded is Result<IReadOnlyList<MatchRecord>>.Failure fileFailure)
 {
-    Console.Error.WriteLine($"File not found: {path}");
-    return 2;
-}
-var lines = File.ReadAllLines(path);
-var parsed = MatchParser.ParseCsv(lines);
-
-if (!parsed.IsValid)
-{
-    Console.Error.WriteLine("Input rejected:");
-    foreach (var e in parsed.Errors) Console.Error.WriteLine("  " + e);
+    Console.Error.WriteLine($"{fileFailure.Error.Code}: {fileFailure.Error.Message}");
     return 1;
 }
-
+var records = ((Result<IReadOnlyList<MatchRecord>>.Success)loaded).Value;
 var names = mode.Equals("both", StringComparison.OrdinalIgnoreCase)
     ? new[] { "A", "B" }
     : new[] { mode };
@@ -26,36 +19,44 @@ foreach (var name in names)
 {
     if (!PolicySelector.TryGet(name, out var policy))
     {
-        Console.Error.WriteLine($"Unknown policy '{name}'. Use A, B or both.");
+        Console.Error.WriteLine($"UNKNOWN_POLICY: '{name}'. Use A, B or both.");
         return 2;
     }
-    var completed = new List<PlayerMatchResult>();
-    foreach (var raw in parsed.Matches)
+
+    if (playerId is not null)
     {
-        switch (MatchWorkflow.Validate(raw))
+        var single = RatingWorkflow.RatePlayer(records, playerId, policy);
+        switch (single)
         {
-            case ValidationOutcome.Invalid invalid:
-                Console.Error.WriteLine($"Skipped {raw.PlayerId}: {invalid.Reason}");
-                break;
-            case ValidationOutcome.Valid valid:
-                var pending = MatchWorkflow.Start(valid.Match);
-                var confirmation = MatchWorkflow.Confirm(pending);
-                if (confirmation is not TransitionOutcome.Success confirmed)
-                    throw new InvalidOperationException("Unexpected confirmation failure.");
-                var completion = MatchWorkflow.Complete(confirmed.State, policy);
-                if (completion is TransitionOutcome.Success { State: MatchState.Completed done })
-                    completed.Add(done.Result);
-                else
-                    throw new InvalidOperationException("Unexpected completion failure.");
+            case Result<PlayerMatchResult>.Failure failure:
+                Console.Error.WriteLine($"{failure.Error.Code}: {failure.Error.Message}");
+                return 1;
+            case Result<PlayerMatchResult>.Success success:
+                PrintResults(name, new[] { success.Value });
                 break;
         }
     }
-    var results = completed.OrderByDescending(r => r.NewMmr)
-        .ThenBy(r => r.PlayerId, StringComparer.Ordinal).ToArray();
-    Console.WriteLine($"=== Policy {name.ToUpperInvariant()} ({parsed.Matches.Length} parsed, {results.Length} accepted) ===");
+    else
+    {
+        var all = RatingWorkflow.RateAll(records, policy);
+        switch (all)
+        {
+            case Result<System.Collections.Immutable.ImmutableArray<PlayerMatchResult>>.Failure failure:
+                Console.Error.WriteLine($"{failure.Error.Code}: {failure.Error.Message}");
+                return 1;
+            case Result<System.Collections.Immutable.ImmutableArray<PlayerMatchResult>>.Success success:
+                PrintResults(name, success.Value);
+                break;
+        }
+    }
+}
+return 0;
+
+static void PrintResults(string policyName, IEnumerable<PlayerMatchResult> results)
+{
+    Console.WriteLine($"=== Policy {policyName.ToUpperInvariant()} ===");
     Console.WriteLine($"{"Player",-8}{"Old",6}{"Delta",7}{"New",6}  Rank");
     foreach (var r in results)
         Console.WriteLine($"{r.PlayerId,-8}{r.OldMmr,6}{r.MmrDelta,7:+#;-#;0}{r.NewMmr,6}  {r.Rank}");
     Console.WriteLine();
 }
-return 0;
