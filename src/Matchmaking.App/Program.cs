@@ -22,7 +22,7 @@ if (mode.Equals("reports", StringComparison.OrdinalIgnoreCase))
         return 1;
     }
 
-    var entries = ((Result<System.Collections.Immutable.ImmutableArray<ReportEntry>>.Success)built).Value;
+    var entries = MatchReports.StreamRankedEntries(\n        ((Result<System.Collections.Immutable.ImmutableArray<ReportEntry>>.Success)built).Value, 0)\n        .ToArray(); // One stable snapshot reused by both reports.
     var scoreA = MatchReports.CreateScore(25);
     var scoreB = MatchReports.CreateScore(40);
     var players = MatchReports.PlayerComparison(entries, 0, scoreA, scoreB);
