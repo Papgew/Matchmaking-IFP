@@ -42,18 +42,7 @@ public static class MatchReports
     public static ImmutableArray<RankTotal> RankDistribution(IEnumerable<ReportEntry> entries) =>
         entries.ToRankTotals();
 
-    // Deferred filter for report values; callers can materialise once for multiple reports.\n    public static IEnumerable<ReportEntry> StreamRankedEntries(IEnumerable<ReportEntry> entries, int minimumMmr)\n    {\n        foreach (var entry in entries)\n            if (entry.Rating.NewMmr >= minimumMmr)\n                yield return entry;\n    }\n\n    // Deferred domain stream: no work until iteration. Caller chooses materialisation.
-    public static IEnumerable<ReportEntry> StreamEntries(
-        IEnumerable<MatchRecord> records,
-        Func<MatchRecord, Result<ReportEntry>> build)
-    {
-        foreach (var match in records)
-        {
-            var result = build(match);
-            if (result is Result<ReportEntry>.Success success)
-                yield return success.Value;
-        }
-    }
+    // Deferred filter for report values; callers can materialise once for multiple reports.\n    public static IEnumerable<ReportEntry> StreamRankedEntries(IEnumerable<ReportEntry> entries, int minimumMmr)\n    {\n        foreach (var entry in entries)\n            if (entry.Rating.NewMmr >= minimumMmr)\n                yield return entry;\n    }\n\n
 }
 
 public static class ReportWorkflow
