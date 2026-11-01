@@ -15,7 +15,7 @@ var records = ((Result<IReadOnlyList<MatchRecord>>.Success)loaded).Value;
 // Assignment 8: reports use real parsed CSV records, native bonus, and two configured scores.
 if (mode.Equals("reports", StringComparison.OrdinalIgnoreCase))
 {
-    var built = ReportWorkflow.Build(records, RatingPolicies.WinLoss, NativeBonus.Compute);
+    var built = ReportWorkflow.Build(Stages.FilterValidMatches(records), RatingPolicies.WinLoss, NativeBonus.Compute);
     if (built is Result<System.Collections.Immutable.ImmutableArray<ReportEntry>>.Failure failed)
     {
         Console.Error.WriteLine($"{failed.Error.Code}: {failed.Error.Message}");
