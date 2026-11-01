@@ -162,3 +162,57 @@ dotnet run --project src/Matchmaking.App -- data/not-found.csv A
 ```
 
 Expected failures include `PLAYER_NOT_FOUND`, `MALFORMED_CSV`, and `FILE_NOT_FOUND`. Build and test execution must be verified in an environment with .NET 8 SDK.
+
+
+## Assignment 8 — Extension Methods, LINQ, Laziness and Native C
+
+**Maintains Assignments 5–7:** immutable match models, original three-stage pipeline, validated factory, Pending/Confirmed/Completed transitions, Result and Option failures. The new reports operate on the same CSV data.
+
+### Platform and build (supported: Linux x86-64, Windows x86-64)
+
+- .NET SDK 8.0 (see `global.json`); C compiler: GCC (tested locally with Debian GCC 14.2.0 on Linux x86-64); `bash` on Linux or PowerShell and MinGW-w64 GCC on Windows.
+- Native source: `native/bonus.c` and `native/bonus.h`. The C export is `int mm_bonus(int kills, int deaths, int weight)`, using the C calling convention. C# binds it via `DllImport("matchbonus", EntryPoint="mm_bonus", CallingConvention=Cdecl)`.
+- Inputs: signed 32-bit integers; kills and deaths must be nonnegative, weight 0..10. `NativeBonus.Compute` rejects invalid inputs with `INVALID_NATIVE_INPUT` before calling C. Output: signed 32-bit integer, `clamp((kills-deaths)*weight, -30, 30)`. Internally C uses 64-bit arithmetic to avoid overflow. Example: kills=10, deaths=2, weight=2 yields 16.
+- Build Linux: `bash native/build-linux.sh`, producing `native/linux-x64/libmatchbonus.so`. Equivalent exact command: `gcc -std=c11 -O2 -Wall -Wextra -fPIC -shared native/bonus.c -o native/linux-x64/libmatchbonus.so` (create the output directory first).
+- Build Windows: `powershell -ExecutionPolicy Bypass -File native/build-windows.ps1`, producing `native/win-x64/matchbonus.dll` (requires x64 MinGW-w64 GCC on PATH).
+- `Directory.Build.targets` runs the appropriate build script before app/test builds and copies the library beside each output assembly. Run from the **repository root**:
+
+```bash
+dotnet build Matchmaking.sln
+dotnet test Matchmaking.sln
+dotnet run --project src/Matchmaking.App -- data/matches.csv reports
+dotnet run --project src/Matchmaking.App -- data/matches.csv reports player-report.csv
+dotnet run --project src/Matchmaking.App -- data/matches.csv A
+dotnet run --project src/Matchmaking.App -- data/invalid.csv reports
+dotnet run --project src/Matchmaking.App -- data/missing.csv reports
+```
+
+The optional third argument in `reports` mode is the export CSV filename. The app prints **both reports** and exports the player comparison when requested. `NativeBonus.Compute` is used by `ReportWorkflow.Build` on every valid input record. Missing native binaries and incorrect exports are converted into `NATIVE_LIBRARY_MISSING` / `NATIVE_ENTRY_MISSING` Result failures; wrong architecture is `NATIVE_ARCHITECTURE_MISMATCH`. A common integration difficulty is the runtime not finding the shared library; the MSBuild copy target places it beside the application/test assembly, avoiding a machine-specific global search path. The library must be built for the process architecture.
+
+### Reports and extensions
+
+**Report 1: Player comparison.** Input: actual CSV matches validated and rated using Policy A, with a native bonus for each match. Intended user: player comparing outcomes. Filter: `NewMmr >= minimumMmr` (the app uses 0). Output: PlayerId, NewMmr, Rank, NativeBonus, Score25, Score40. LINQ stages: `Where`, `Select`, `OrderByDescending`, `ThenBy`. Sort: MMR descending, then PlayerId ascending. Expected example: a winning match with kills=5, deaths=2 gets Score25=28 and Score40=43; native bonus=6.
+
+**Report 2: Rank distribution.** Input: the same completed entries. Intended user: matchmaking administrator. Filter: accepted valid matches. Output: Rank, Players, TotalNewMmr, TotalNativeBonus. LINQ stages: `GroupBy`, `Select`, `Count`, `Sum`, `OrderByDescending`, `ThenBy`. Sort: total MMR descending, then rank enum ascending. Example: two Gold players with MMR 1500 and 1400, bonuses 6 and 4, yield Gold/2/2900/10.
+
+**Extension 1:** `WithMinimumMmr(this IEnumerable<ReportEntry>, int)` returns a deferred `IEnumerable<ReportEntry>`. It belongs on a queryable sequence because it expresses a reusable, composable domain filter.
+
+**Extension 2:** `ToRankTotals(this IEnumerable<ReportEntry>)` returns `ImmutableArray<RankTotal>`. It belongs on the sequence because it summarises that collection into rank totals. Both extensions are invoked by report methods used in the console app.
+
+**Currying:** `CreateScore(int winWeight)` returns `Func<MatchRecord,int>`. Partial application `CreateScore(25)` and `CreateScore(40)` creates two independent functions used on the same input in Report 1, without mutable global settings. On a winning match with kills=5, deaths=2 the outputs are 28 and 43.
+
+### Deferred execution and resource ownership
+
+`MatchReports.StreamRankedEntries` uses `yield return` to defer filtering until enumeration. Merely constructing the enumerable does not process records. The app calls `ToArray()` exactly once after constructing the stream; both reports then reuse that snapshot. Before materialisation, enumerating the deferred sequence again repeats the filter and traverses its source; afterwards, enumerating the array does not rerun the query. The xUnit counter probe verifies this timing without introducing side effects into production logic.
+
+`CsvDataLoader.Load` uses `File.ReadAllLines`, a convenience API that internally opens and closes its file handle, returning an in-memory snapshot. This avoids yielding values from a disposed reader. Report export uses `using var StreamWriter` in the console layer; the app owns and disposes it on success and exceptions. The tests verify file handles can be reopened exclusively after both normal and exceptional disposal. A failed batch returns a Result failure without exposing partially constructed report rows.
+
+**Retention and allocation:** `ReportWorkflow.Build` materialises the input once into an immutable array and builds a result snapshot; `StreamRankedEntries` can retain a reference to its source until enumeration completes, so the app materialises once and releases the iterator. Report arrays remain in scope only during display/export. No persistent caches, event subscriptions or long-lived collections are used. Streaming can reduce temporary memory, while snapshots make repeated report queries deterministic and prevent repeated input reads. The native function uses scalar arguments and allocates no native memory; there is no native handle to release.
+
+### Assignment 8 test coverage and current status
+
+`tests/Matchmaking.Tests/Assignment8Tests.cs` adds **18 xUnit tests**: both extension methods; grouping and totals; deterministic tie-breaking; empty and no-match reports; two configured functions; lazy timing and snapshot reuse; actual native calculation and clamp; invalid native input; simulated missing native library; successful full workflow; failed workflow without partial results; invalid match blocking native invocation; StreamWriter disposal on success and exception; missing and malformed file boundaries. Previous Assignment 5–7 tests remain.
+
+**Latest verification:** the C library compiled with GCC 14.2.0 on Linux x86-64 and a real `ctypes` call returned the manually expected 16. The .NET SDK is not installed in the authoring environment, so `dotnet build` and `dotnet test` have **not** been executed here; run them locally and record the results before submission. Generated `bin/`, `obj/`, `native/linux-x64/` and `native/win-x64/` binaries are reproducible outputs; include the sources and build scripts in a submitted ZIP.
+
+**Contribution:** Altybayev Aldiyar — project owner. Assignment 8 implementation and test files are listed above; verify and be prepared to explain each part during the individual defense.
