@@ -1,0 +1,5 @@
+PlayerId,CurrentMMR,Kills,Deaths,MatchDurationMinutes,IsWin
+Q001,1000,2,1,3,true
+Q002,1050,2,1,3,true
+Q003,1600,4,0,15,false
+Q004,1610,4,0,15,false
