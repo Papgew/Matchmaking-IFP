@@ -1,19 +1,11 @@
 <Project>
-  <!-- Native component is built for the host OS and copied beside the app/test assembly. -->
-  <Target Name="BuildMatchBonus" BeforeTargets="BeforeBuild"
-          Condition="'$(MSBuildProjectName)' != 'Matchmaking.Core'">
-    <Exec Condition="'$(OS)' != 'Windows_NT'"
-          Command="bash &quot;$(MSBuildThisFileDirectory)native/build-linux.sh&quot;" />
-    <Exec Condition="'$(OS)' == 'Windows_NT'"
-          Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)native/build-windows.ps1&quot;" />
+  <!-- App and tests build the native library on the host OS and copy it beside the managed output. -->
+  <Target Name="BuildMatchBonus" BeforeTargets="BeforeBuild" Condition="'$(MSBuildProjectName)' != 'Matchmaking.Core'">
+    <Exec Condition="'$(OS)' != 'Windows_NT'" Command="bash &quot;$(MSBuildThisFileDirectory)native/build-linux.sh&quot;" />
+    <Exec Condition="'$(OS)' == 'Windows_NT'" Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)native/build-windows.ps1&quot;" />
   </Target>
-  <Target Name="CopyMatchBonus" AfterTargets="Build"
-          Condition="'$(MSBuildProjectName)' != 'Matchmaking.Core'">
-    <Copy Condition="'$(OS)' != 'Windows_NT'"
-          SourceFiles="$(MSBuildThisFileDirectory)native/linux-x64/libmatchbonus.so"
-          DestinationFolder="$(TargetDir)" />
-    <Copy Condition="'$(OS)' == 'Windows_NT'"
-          SourceFiles="$(MSBuildThisFileDirectory)native/win-x64/matchbonus.dll"
-          DestinationFolder="$(TargetDir)" />
+  <Target Name="CopyMatchBonus" AfterTargets="Build" Condition="'$(MSBuildProjectName)' != 'Matchmaking.Core'">
+    <Copy Condition="'$(OS)' != 'Windows_NT'" SourceFiles="$(MSBuildThisFileDirectory)native/linux-x64/libmatchbonus.so" DestinationFolder="$(TargetDir)" />
+    <Copy Condition="'$(OS)' == 'Windows_NT'" SourceFiles="$(MSBuildThisFileDirectory)native/win-x64/matchbonus.dll" DestinationFolder="$(TargetDir)" />
   </Target>
 </Project>
