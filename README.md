@@ -2,8 +2,7 @@
 
 **Course:** Introduction to Functional Programming (2026–2027)  
 **Student / project owner:** Altybayev Aldiyar  
-**Student group:** [fill in before submission]  
-**Repository:** https://github.com/Papgew/Matchmaking-IFP  
+**Student group:** 2513  
 **Final submission branch:** `final-project`  
 **Final commit:** use `git rev-parse HEAD` on the submitted branch; the exact SHA is also included in the submitted group report.  
 **Platform:** .NET 8.0 SDK and C compiler for the native component.  
