@@ -1,7 +1,7 @@
 #include "bonus.h"
 
-// Contract: kills/deaths >= 0, weight 0..10; caller validates inputs.
-// Compute in 64-bit arithmetic to avoid signed int overflow.
+// The C# adapter validates kills/deaths >= 0 and weight in [0,10].
+// Widen before subtract/multiply to prevent signed 32-bit overflow.
 int mm_bonus(int kills, int deaths, int weight)
 {
     long long value = ((long long)kills - (long long)deaths) * (long long)weight;
