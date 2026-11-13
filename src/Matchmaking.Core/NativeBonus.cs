@@ -18,6 +18,7 @@ public static class NativeBonus
         ArgumentNullException.ThrowIfNull(invoke);
         if (kills < 0 || deaths < 0 || weight is < 0 or > 10)
             return Result<int>.Fail("INVALID_NATIVE_INPUT", "Kills/deaths must be nonnegative and weight must be 0..10.");
+
         try
         {
             return Result<int>.Ok(invoke(kills, deaths, weight));
