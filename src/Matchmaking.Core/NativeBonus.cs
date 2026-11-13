@@ -4,18 +4,19 @@ namespace Matchmaking.Core;
 
 public static class NativeBonus
 {
-    // C int maps to C# int; cdecl; returns clamp((kills - deaths) * weight, -30, 30).
+    // C int <-> C# int; cdecl; exported by native/bonus.c.
     [DllImport("matchbonus", EntryPoint = "mm_bonus", CallingConvention = CallingConvention.Cdecl)]
     private static extern int CalculateNative(int kills, int deaths, int weight);
 
     public static Result<int> Compute(int kills, int deaths, int weight) =>
         ComputeWith(kills, deaths, weight, CalculateNative);
 
-    // Injectable boundary permits deterministic error-path tests without faking the real-call test.
+    // Injectable boundary makes failure-path tests deterministic, while Compute tests real P/Invoke.
     public static Result<int> ComputeWith(
         int kills, int deaths, int weight, Func<int, int, int, int> invoke)
     {
-        if (kills < 0 || deaths < 0 || weight < 0 || weight > 10)
+        ArgumentNullException.ThrowIfNull(invoke);
+        if (kills < 0 || deaths < 0 || weight is < 0 or > 10)
             return Result<int>.Fail("INVALID_NATIVE_INPUT", "Kills/deaths must be nonnegative and weight must be 0..10.");
         try
         {
