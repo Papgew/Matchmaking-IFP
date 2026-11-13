@@ -5,21 +5,23 @@ namespace Matchmaking.Tests;
 
 public class Assignment8Tests
 {
-    private static MatchRecord Raw(string id = "P001", int mmr = 1000, int kills = 5, int deaths = 2, bool win = true) =>
-        new(id, mmr, kills, deaths, 10, win);
+    private static MatchRecord Raw(string id = "P001", int mmr = 1000, int kills = 5,
+        int deaths = 2, bool win = true) => new(id, mmr, kills, deaths, 10, win);
 
     private static ReportEntry Entry(string id, int newMmr, Rank rank, int bonus = 6) =>
         new(Raw(id, newMmr), new PlayerMatchResult(id, newMmr, 0, newMmr, rank), bonus);
 
-    [Fact] public void MinimumMmrExtensionFiltersDomainValues()
+    [Fact] public void Extension_MinimumMmrFiltersCorrectly()
     {
-        var result = new[] { Entry("low", 900, Rank.Bronze), Entry("high", 1500, Rank.Gold) }.WithMinimumMmr(1000).ToArray();
+        var result = new[] { Entry("low", 900, Rank.Bronze), Entry("high", 1500, Rank.Gold) }
+            .WithMinimumMmr(1000).ToArray();
         Assert.Equal("high", Assert.Single(result).Match.PlayerId);
     }
 
-    [Fact] public void RankTotalsExtensionGroupsAndAggregates()
+    [Fact] public void Extension_RankTotalsGroupsAndAggregates()
     {
-        var result = new[] { Entry("A", 1500, Rank.Gold, 6), Entry("B", 1400, Rank.Gold, 4), Entry("C", 900, Rank.Bronze, 2) }.ToRankTotals();
+        var result = new[] { Entry("A", 1500, Rank.Gold, 6), Entry("B", 1400, Rank.Gold, 4),
+            Entry("C", 900, Rank.Bronze, 2) }.ToRankTotals();
         Assert.Equal(Rank.Gold, result[0].Rank);
         Assert.Equal(2, result[0].Players);
         Assert.Equal(2900, result[0].TotalNewMmr);
@@ -28,32 +30,33 @@ public class Assignment8Tests
 
     [Fact] public void PlayerReportUsesTieBreakerAndFiltering()
     {
-        var input = new[] { Entry("B", 1500, Rank.Gold), Entry("A", 1500, Rank.Gold), Entry("C", 900, Rank.Bronze) };
-        var result = MatchReports.PlayerComparison(input, 1000, MatchReports.CreateScore(25), MatchReports.CreateScore(40));
-        Assert.Equal(new[] { "A", "B" }, result.Select(x => x.PlayerId));
+        var input = new[] { Entry("B", 1500, Rank.Gold), Entry("A", 1500, Rank.Gold),
+            Entry("C", 900, Rank.Bronze) };
+        var rows = MatchReports.PlayerComparison(input, 1000, MatchReports.CreateScore(25),
+            MatchReports.CreateScore(40));
+        Assert.Equal(new[] { "A", "B" }, rows.Select(row => row.PlayerId));
     }
 
-    [Fact] public void BothReportsHandleEmptyDataset()
+    [Fact] public void ReportsHandleEmptyDataset()
     {
-        Assert.Empty(MatchReports.PlayerComparison(Array.Empty<ReportEntry>(), 0, MatchReports.CreateScore(25), MatchReports.CreateScore(40)));
+        Assert.Empty(MatchReports.PlayerComparison(Array.Empty<ReportEntry>(), 0,
+            MatchReports.CreateScore(25), MatchReports.CreateScore(40)));
         Assert.Empty(MatchReports.RankDistribution(Array.Empty<ReportEntry>()));
     }
 
-    [Fact] public void ReportWithNoMatchesIsEmpty()
+    [Fact] public void ReportWithNoMatchingRowsIsEmpty()
     {
         Assert.Empty(MatchReports.PlayerComparison(new[] { Entry("A", 1000, Rank.Silver) }, 2000,
             MatchReports.CreateScore(25), MatchReports.CreateScore(40)));
     }
 
-    [Fact] public void CurriedConfigurationsGiveDifferentResults()
+    [Fact] public void CurriedScorePoliciesDifferForSameInput()
     {
-        var a = MatchReports.CreateScore(25);
-        var b = MatchReports.CreateScore(40);
-        Assert.Equal(28, a(Raw()));
-        Assert.Equal(43, b(Raw()));
+        Assert.Equal(28, MatchReports.CreateScore(25)(Raw()));
+        Assert.Equal(43, MatchReports.CreateScore(40)(Raw()));
     }
 
-    [Fact] public void DeferredProcessingOnlyStartsOnIterationAndSnapshotDoesNotRepeat()
+    [Fact] public void LazyQueryDefersUntilEnumerationAndSnapshotAvoidsRepeat()
     {
         var observed = 0;
         IEnumerable<ReportEntry> Source()
@@ -63,30 +66,31 @@ public class Assignment8Tests
             observed++;
             yield return Entry("B", 900, Rank.Bronze);
         }
-        var deferred = MatchReports.StreamRankedEntries(Source(), 1000);
+        var lazy = MatchReports.StreamRankedEntries(Source(), 1000);
         Assert.Equal(0, observed);
-        var snapshot = deferred.ToArray();
+        var snapshot = lazy.ToArray();
         Assert.Equal(2, observed);
         Assert.Single(snapshot);
         Assert.Single(snapshot);
         Assert.Equal(2, observed);
-        Assert.Single(deferred);
+        Assert.Single(lazy);
         Assert.Equal(4, observed);
     }
 
-    [Fact] public void NativeCallMatchesManualCalculation()
+    [Fact] public void NativeRealCallMatchesManualCalculation()
     {
-        // (10 - 2) * 2 = 16, within [-30, 30].
-        var result = Assert.IsType<Result<int>.Success>(NativeBonus.Compute(10, 2, 2));
-        Assert.Equal(16, result.Value);
+        // (10-2)*2=16; test must call the compiled C export, not a C# replacement.
+        var value = Assert.IsType<Result<int>.Success>(NativeBonus.Compute(10, 2, 2));
+        Assert.Equal(16, value.Value);
     }
 
-    [Fact] public void NativeCallClampsLargeScore()
+    [Fact] public void NativeRealCallClampsAtPositiveAndNegativeLimits()
     {
         Assert.Equal(30, Assert.IsType<Result<int>.Success>(NativeBonus.Compute(100, 0, 2)).Value);
+        Assert.Equal(-30, Assert.IsType<Result<int>.Success>(NativeBonus.Compute(0, 100, 2)).Value);
     }
 
-    [Fact] public void NativeInvalidInputRejectedBeforeCall()
+    [Fact] public void NativeInvalidInputPreventsInvocation()
     {
         var calls = 0;
         var result = NativeBonus.ComputeWith(-1, 0, 2, (k, d, w) => { calls++; return 0; });
@@ -94,32 +98,33 @@ public class Assignment8Tests
         Assert.Equal(0, calls);
     }
 
-    [Fact] public void NativeLoadFailureBecomesResult()
+    [Fact] public void NativeLoadFailureIsExplicitResult()
     {
-        var result = NativeBonus.ComputeWith(5, 2, 2, (k, d, w) => throw new DllNotFoundException("test missing library"));
+        var result = NativeBonus.ComputeWith(5, 2, 2,
+            (kills, deaths, weight) => throw new DllNotFoundException("controlled missing native library"));
         Assert.Equal("NATIVE_LIBRARY_MISSING", Assert.IsType<Result<int>.Failure>(result).Error.Code);
     }
 
-    [Fact] public void CompleteWorkflowProducesTwoReportsAndUsesNative()
+    [Fact] public void CompleteReportWorkflowUsesRealNativeCalls()
     {
-        var built = Assert.IsType<Result<System.Collections.Immutable.ImmutableArray<ReportEntry>>.Success>(
-            ReportWorkflow.Build(new[] { Raw("A"), Raw("B", 1500, 1, 2, false) },
-                RatingPolicies.WinLoss, NativeBonus.Compute));
-        var snapshot = MatchReports.StreamRankedEntries(built.Value, 0).ToArray();
-        var players = MatchReports.PlayerComparison(snapshot, 0, MatchReports.CreateScore(25), MatchReports.CreateScore(40));
+        var result = ReportWorkflow.Build(new[] { Raw("A"), Raw("B", 1500, 1, 2, false) },
+            RatingPolicies.WinLoss, NativeBonus.Compute);
+        var entries = Assert.IsType<Result<System.Collections.Immutable.ImmutableArray<ReportEntry>>.Success>(result).Value;
+        var snapshot = MatchReports.StreamRankedEntries(entries, 0).ToArray();
+        var rows = MatchReports.PlayerComparison(snapshot, 0, MatchReports.CreateScore(25), MatchReports.CreateScore(40));
         var ranks = MatchReports.RankDistribution(snapshot);
-        Assert.Equal(2, players.Length);
-        Assert.Equal(6, players.Single(x => x.PlayerId == "A").NativeBonus);
-        Assert.Equal(2, ranks.Sum(x => x.Players));
+        Assert.Equal(2, rows.Length);
+        Assert.Equal(6, rows.Single(row => row.PlayerId == "A").NativeBonus);
+        Assert.Equal(2, ranks.Sum(rank => rank.Players));
     }
 
-    [Fact] public void FailedNativeWorkflowReturnsNoPartialBatch()
+    [Fact] public void FailedNativeReportWorkflowDoesNotExposePartialBatch()
     {
         var calls = 0;
-        Result<int> Failing(int kills, int deaths, int weight)
+        Result<int> Failing(int k, int d, int weight)
         {
             calls++;
-            return calls == 2 ? Result<int>.Fail("NATIVE_LIBRARY_MISSING", "controlled failure") : Result<int>.Ok(6);
+            return calls == 2 ? Result<int>.Fail("NATIVE_LIBRARY_MISSING", "controlled") : Result<int>.Ok(6);
         }
         var result = ReportWorkflow.Build(new[] { Raw("A"), Raw("B") }, RatingPolicies.WinLoss, Failing);
         Assert.Equal("NATIVE_LIBRARY_MISSING",
@@ -127,7 +132,7 @@ public class Assignment8Tests
         Assert.Equal(2, calls);
     }
 
-    [Fact] public void InvalidDomainRecordPreventsNativeCall()
+    [Fact] public void InvalidMatchPreventsNativeInvocation()
     {
         var calls = 0;
         var result = ReportWorkflow.Build(new[] { Raw() with { Deaths = -1 } }, RatingPolicies.WinLoss,
@@ -137,43 +142,44 @@ public class Assignment8Tests
         Assert.Equal(0, calls);
     }
 
-    [Fact] public void StreamWriterReleasesFileAfterSuccess()
+    [Fact] public void WriterDisposesHandleAfterNormalCompletion()
     {
         var path = Path.Combine(Path.GetTempPath(), $"a8-{Guid.NewGuid():N}.csv");
         try
         {
-            using (var writer = new StreamWriter(path))
-                writer.WriteLine("A,1000");
-            using var stream = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
-            Assert.True(stream.Length > 0);
+            using (var writer = new StreamWriter(path)) writer.WriteLine("A,1000");
+            using (var stream = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+                Assert.True(stream.Length > 0);
         }
         finally { File.Delete(path); }
     }
 
-    [Fact] public void StreamWriterReleasesFileAfterException()
+    [Fact] public void WriterDisposesHandleWhenExceptionInterruptsWrite()
     {
         var path = Path.Combine(Path.GetTempPath(), $"a8-{Guid.NewGuid():N}.csv");
         try
         {
-            Assert.Throws<InvalidOperationException>(() =>
+            Action writeAndThrow = () =>
             {
                 using var writer = new StreamWriter(path);
                 writer.WriteLine("test");
-                throw new InvalidOperationException("simulated write failure");
-            });
-            using var stream = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
-            Assert.True(stream.Length > 0);
+                throw new InvalidOperationException("simulated error");
+            };
+            Assert.Throws<InvalidOperationException>(writeAndThrow);
+            using (var stream = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+                Assert.True(stream.Length > 0);
         }
         finally { File.Delete(path); }
     }
 
-    [Fact] public void FileBoundaryMissingFileStillFails()
+    [Fact] public void FileBoundaryMissingFileIsFailure()
     {
         var path = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"), "missing.csv");
-        Assert.Equal("FILE_NOT_FOUND", Assert.IsType<Result<IReadOnlyList<MatchRecord>>.Failure>(CsvDataLoader.Load(path)).Error.Code);
+        Assert.Equal("FILE_NOT_FOUND",
+            Assert.IsType<Result<IReadOnlyList<MatchRecord>>.Failure>(CsvDataLoader.Load(path)).Error.Code);
     }
 
-    [Fact] public void FileBoundaryMalformedCsvStillFails()
+    [Fact] public void FileBoundaryMalformedCsvIsFailure()
     {
         var path = Path.Combine(Path.GetTempPath(), $"a8-{Guid.NewGuid():N}.csv");
         try

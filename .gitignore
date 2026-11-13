@@ -4,3 +4,9 @@ obj/
 .idea/
 *.user
 .env
+native/linux-x64/
+native/win-x64/
+*.dll
+*.so
+*.pdb
+.DS_Store

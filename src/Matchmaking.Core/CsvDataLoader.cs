@@ -24,6 +24,10 @@ public static class CsvDataLoader
         {
             return Result<IReadOnlyList<MatchRecord>>.Fail("FILE_ACCESS_DENIED", $"Cannot load '{path}': {ex.Message}");
         }
+        catch (ArgumentException ex)
+        {
+            return Result<IReadOnlyList<MatchRecord>>.Fail("INVALID_FILE_PATH", $"Cannot load '{path}': {ex.Message}");
+        }
         catch (IOException ex)
         {
             return Result<IReadOnlyList<MatchRecord>>.Fail("FILE_IO_ERROR", $"Cannot load '{path}': {ex.Message}");

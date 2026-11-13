@@ -1,218 +1,111 @@
-# Matchmaking & Skill Rating
+# Matchmaking & Skill Rating — Final Project
 
-## Team
-Altybayev Aldiyar
+**Course:** Introduction to Functional Programming (2026–2027)  
+**Student / project owner:** Altybayev Aldiyar  
+**Student group:** [fill in before submission]  
+**Repository:** https://github.com/Papgew/Matchmaking-IFP  
+**Final submission branch:** `final-project`  
+**Final commit:** use `git rev-parse HEAD` on the submitted branch; the exact SHA is also included in the submitted group report.  
+**Platform:** .NET 8.0 SDK and C compiler for the native component.  
+**Verified CI code commit:** `ba64487549c232d7cbde3b27a11815acadab2a21` ([GitHub Actions run](https://github.com/Papgew/Matchmaking-IFP/actions/runs/43518995851)).
 
-A small .NET project for calculating player MMR changes after a match and assigning a rank.
+## Overview
 
-## 1. Goal
-The application reads a CSV file, validates match records, applies one of two rating policies, and prints a sorted result list.
+A console program evaluates match performance, updates player MMR using configurable scoring policies, recommends compatible matchmaking pairs, and produces two analytical reports using real native C calculations. The main domain is one match record per player per input batch. The program has **three distinct workflows**:
 
-Input CSV format:
-`PlayerId,CurrentMMR,Kills,Deaths,MatchDurationMinutes,IsWin`
+1. **Rating & ranking** — Parse CSV, filter unplayable match records, apply Policy A/B through a three-stage pure pipeline, and print the ordered leaderboard. A specific player can be looked up with an explicit `Option` failure path.
+2. **Pair recommendation** — Calculate updated MMR, sort eligible players and greedily pair neighboring players with a configurable maximum MMR gap; list unmatched players. Reject duplicate IDs and invalid gaps.
+3. **Analytics & export** — Validate/rate matches, compute native C performance bonuses, produce a filtered player comparison report plus a grouped rank distribution report, and optionally save CSV.
 
-Output:
-A list of `PlayerMatchResult(PlayerId, OldMmr, MmrDelta, NewMmr, Rank)`, sorted by `NewMmr` descending and then by `PlayerId`.
+`src/Matchmaking.Core/Models.cs` contains immutable match and rating records; `PairingPlanner.cs` and `MatchReports.cs` define additional domain outputs. Application I/O lives in `src/Matchmaking.App/Program.cs` and file access is confined to `CsvDataLoader.cs`/the console export boundary. There are no databases, credentials, external APIs, or mutable global settings.
 
-## 2. Rules
-A match is invalid if:
-- `MatchDurationMinutes < 3` (exactly 3 is allowed)
-- `Kills < 0`
-- `Deaths < 0`
-- `CurrentMMR < 0`
+## Requirements and rules
 
-After a valid match:
-- `NewMmr = max(0, CurrentMMR + delta)`
+Input CSV columns: `PlayerId,CurrentMMR,Kills,Deaths,MatchDurationMinutes,IsWin`.
 
-Ranks:
-- `< 1000` => Bronze
-- `1000–1499` => Silver
-- `1500–1999` => Gold
-- `2000–2499` => Platinum
-- `>= 2500` => Diamond
+- Required `PlayerId`; integer nonnegative current MMR, kills and deaths; finite duration **at least 3 minutes**; Boolean win flag. Zero and `false` are legitimate values.
+- Malformed field counts/types reject the entire CSV file with `MALFORMED_CSV`. Missing files yield `FILE_NOT_FOUND`; empty CSV is valid. Parsed but non-playable match rows are **skipped with an explicit reason** in bulk workflows.
+- Final MMR: `clamp(CurrentMMR + delta, 0, int.MaxValue)`; ranking thresholds: Bronze <1000, Silver 1000–1499, Gold 1500–1999, Platinum 2000–2499, Diamond >=2500.
+- Policy A (Win/Loss): `delta = (win ? +25 : -25) + clamp(kills-deaths,-3,3)`.
+- Policy B (Performance): `KDA = kills/max(deaths,1)`; `delta = roundAwayFromZero(clamp((KDA-1)*20,-40,60)+min(minutes,30)/30*10)`.
+- Pairing: `maxMmrGap` must be >=0. After sorting by final MMR ascending then PlayerId, consider neighbors from left to right and create one pair when the gap is within the limit. Otherwise the earlier player waits. A PlayerId cannot appear twice in one pairing pool.
+- Native C scoring: `clamp((kills-deaths)*weight,-30,30)`, weight is 0–10. The reports call the **real C** `mm_bonus` with weight 2 via P/Invoke.
 
-### Policy A (Win/Loss)
-`delta = ±25 + clamp(Kills - Deaths, -3, +3)`
+## Environment and exact commands
 
-### Policy B (Performance-First)
-The match result is ignored.
-
-`KDA = Kills / max(Deaths, 1)`
-
-`delta = round( clamp((KDA - 1) * 20, -40, 60) + min(minutes, 30) / 30 * 10 )`
-
-Rounding is away from zero.
-
-## 3. Run the project (.NET SDK 8.0+)
-Run from the project root, where `Matchmaking.sln` is located.
+Supported build systems: Linux x86-64 with Bash and GCC; Windows x86-64 with PowerShell and GCC/MinGW-w64 or MSVC `cl.exe` in Visual Studio Developer PowerShell. **Use the repository root** (the directory with `Matchmaking.sln`) as the working directory.
 
 ```bash
-dotnet build
-dotnet run --project src/Matchmaking.App -- data/matches.csv both   # both policies
-dotnet run --project src/Matchmaking.App -- data/matches.csv A      # policy A only
-dotnet run --project src/Matchmaking.App -- data/invalid.csv both   # validation error, exit code 1
-dotnet run --project src/Matchmaking.App -- data/empty.csv both     # empty result
-dotnet test
-```
-
-## 4. Sample data and expected output (`data/matches.csv`)
-
-| Player | MMR | K/D | Minutes | Win | Note |
-|---|---:|---:|---:|---:|---|
-| P001 | 1480 | 10/5 | 20 | yes | valid |
-| P002 | 1520 | 2/8 | 15 | no | rank differs by policy |
-| P003 | 990 | 5/5 | 3 | yes | boundary: exactly 3 minutes is valid |
-| P004 | 2100 | 8/2 | 2 | yes | rejected: too short |
-| P005 | 1200 | -1/3 | 10 | no | rejected: negative kills |
-| P006 | 1990 | 20/0 | 25 | yes | deaths = 0 |
-
-### Policy A expected results
-- P006: +28 -> 2018 -> Platinum
-- P001: +28 -> 1508 -> Gold
-- P002: -28 -> 1492 -> Silver
-- P003: +25 -> 1015 -> Silver
-
-### Policy B expected results
-- P006: +68 -> 2058 -> Platinum
-- P002: -10 -> 1510 -> Gold
-- P001: +27 -> 1507 -> Gold
-- P003: +1 -> 991 -> Bronze
-
-Important difference:
-- order changes (P002 and P001 swap places)
-- P002 moves from Silver to Gold
-- P003 moves from Silver to Bronze
-
-## 5. Pipeline stages
-The project uses three pipeline stages in `src/Matchmaking.Core/Stages.cs`:
-
-| # | Function | Input -> Output | Rule |
-|---|---|---|---|
-| 1 | `FilterValidMatches` | `IEnumerable<MatchRecord>` -> `ImmutableArray<MatchRecord>` | remove invalid matches |
-| 2 | `ApplyMmrPolicy` | `IEnumerable<MatchRecord>`, `Func<MatchRecord,int>` -> `ImmutableArray<RatedMatch>` | apply policy and compute new MMR |
-| 3 | `BuildPlayerResults` | `IEnumerable<RatedMatch>` -> `ImmutableArray<PlayerMatchResult>` | create result cards and rank them |
-
-The composition is done by `MatchmakingPipeline.Run` in `Pipeline.cs`:
-`Filter -> ApplyPolicy -> BuildResults`
-
-Example trace for P002 under policy A:
-`MatchRecord(P002, 1520, 2, 8, 15, false)` -> `RatedMatch(..., -28, 1492)` -> `PlayerMatchResult(P002, 1520, -28, 1492, Silver)`
-
-## 6. Project structure
-- `src/Matchmaking.Core/Models.cs` — immutable domain models
-- `src/Matchmaking.Core/MatchParser.cs` — CSV parsing and validation
-- `src/Matchmaking.Core/Stages.cs` — pipeline stages
-- `src/Matchmaking.Core/RatingPolicies.cs` — Policy A and Policy B
-- `src/Matchmaking.Core/Pipeline.cs` — pipeline composition and policy selection
-- `src/Matchmaking.App/Program.cs` — console entry point and file I/O
-- `tests/Matchmaking.Tests/PipelineTests.cs` — xUnit tests
-
-## 7. Requirements covered
-- immutable models
-- parsing/validation at the boundary
-- null is not treated as empty input
-- at least 3 clean stages
-- higher-order function with delegate call `policy(m)`
-- two policies, chosen outside the pipeline
-- pure core logic; UI/console I/O only in the app layer
-- tests for edge cases and behavior
-
-## 8. Notes
-This solution follows a functional pipeline style, where the domain logic stays separate from file and console operations.
-
-
-## Assignment 6 — Handling Temporal Coupling
-
-**Before (unsafe conceptual example):** `Complete(match)` could calculate a result directly from an unconfirmed match. The caller had to remember to validate and confirm first. Omitting either step could publish an invalid rating.
-
-**After:** `ValidatedMatch.Create(raw)` checks nonempty PlayerId, nonnegative MMR/kills/deaths, and finite duration >= 3 minutes. Its constructor is private; only `ValidationOutcome.Valid` carries a validated value, while `Invalid` carries a reason. `MatchWorkflow.Start(validated)` creates `Pending`; `Confirm(Pending)` produces `Confirmed`; `Complete(Confirmed, policy)` produces `Completed` with the rating. Transitions use switch pattern matching. Attempts to complete Pending, confirm Completed, or repeat confirmation/completion return `TransitionOutcome.Rejected` with the original state unchanged. The app now uses this sequence for each parsed record. Invalid records are skipped with explicit reasons, preserving the Assignment 5 behavior of excluding invalid playable matches. The existing three-stage pipeline remains available for Assignment 5 tests; the new workflow reuses its rating and result stages.
-
-**Demonstration:** `dotnet run --project src/Matchmaking.App -- data/matches.csv both` (from repository root). Run `dotnet test` for Assignment 5 and 6 tests. SDK specified in `global.json`: .NET 8.0.100 with latestFeature roll-forward.
-
-**Tests added:** `WorkflowTests.cs`: factory valid boundary, duration rejection, negative kills, missing player, null record, missing confirmation, valid completion and MMR, repeated confirmation, repeated completion, and handling every state. Expected outcomes are asserted using xUnit. Run locally to verify actual results.
-
-
-## Assignment 7 — Exception Handling in Functional Programming
-
-Assignment 7 builds on the existing Assignment 5 pipeline and Assignment 6 validated factory and state transitions.
-
-- `Result.cs` defines `Result<T>.Success`, `Result<T>.Failure(DomainError)`, `Map`, `Bind`, and `Option<T>.Some/None`. Failed operations bypass downstream callbacks.
-- `RatingWorkflow.cs` uses `Option` to find a player (including players with zero MMR) and `Result` to compose validation, confirmation, and completion. Domain errors include `PLAYER_NOT_FOUND`, `INVALID_MATCH`, and `INVALID_TRANSITION`.
-- `RateAll` returns either the complete sorted set of ratings or one failure; it does not publish partial batches.
-- `CsvDataLoader.cs` converts missing files, inaccessible files, I/O failures, and malformed CSV into explicit failures.
-- `Program.cs` handles the final result at the console boundary and prints actionable error codes.
-- `ResultWorkflowTests.cs` adds 12 xUnit tests for successful and failed chains, lookup, Map/Bind, file failures, and batch atomicity.
-
-### Before and after
-
-**Before:** file loading could throw, and workflow rejections were handled separately from pipeline composition.
-
-**After:** expected failures are represented as values, `Map` and `Bind` short-circuit failed computations, and invalid batches produce no partial results. The existing Assignment 5 and 6 code and tests remain.
-
-### Run
-
-```bash
+dotnet --version
 dotnet build Matchmaking.sln
 dotnet test Matchmaking.sln
-dotnet run --project src/Matchmaking.App -- data/matches.csv A
+
+# Workflow 1: rating and player lookup
+dotnet run --project src/Matchmaking.App -- data/matches.csv both
 dotnet run --project src/Matchmaking.App -- data/matches.csv A P001
-dotnet run --project src/Matchmaking.App -- data/matches.csv A UNKNOWN
-dotnet run --project src/Matchmaking.App -- data/invalid.csv A
-dotnet run --project src/Matchmaking.App -- data/not-found.csv A
-```
 
-Expected failures include `PLAYER_NOT_FOUND`, `MALFORMED_CSV`, and `FILE_NOT_FOUND`. Build and test execution must be verified in an environment with .NET 8 SDK.
+# Workflow 2: pair suggestions (A/B, gap 100)
+dotnet run --project src/Matchmaking.App -- data/matches.csv pairs A 100
 
-
-## Assignment 8 — Extension Methods, LINQ, Laziness and Native C
-
-**Maintains Assignments 5–7:** immutable match models, original three-stage pipeline, validated factory, Pending/Confirmed/Completed transitions, Result and Option failures. The new reports operate on the same CSV data.
-
-### Platform and build (supported: Linux x86-64, Windows x86-64)
-
-- .NET SDK 8.0 (see `global.json`); C compiler: GCC (tested locally with Debian GCC 14.2.0 on Linux x86-64); `bash` on Linux or PowerShell and MinGW-w64 GCC on Windows.
-- Native source: `native/bonus.c` and `native/bonus.h`. The C export is `int mm_bonus(int kills, int deaths, int weight)`, using the C calling convention. C# binds it via `DllImport("matchbonus", EntryPoint="mm_bonus", CallingConvention=Cdecl)`.
-- Inputs: signed 32-bit integers; kills and deaths must be nonnegative, weight 0..10. `NativeBonus.Compute` rejects invalid inputs with `INVALID_NATIVE_INPUT` before calling C. Output: signed 32-bit integer, `clamp((kills-deaths)*weight, -30, 30)`. Internally C uses 64-bit arithmetic to avoid overflow. Example: kills=10, deaths=2, weight=2 yields 16.
-- Build Linux: `bash native/build-linux.sh`, producing `native/linux-x64/libmatchbonus.so`. Equivalent exact command: `gcc -std=c11 -O2 -Wall -Wextra -fPIC -shared native/bonus.c -o native/linux-x64/libmatchbonus.so` (create the output directory first).
-- Build Windows: `powershell -ExecutionPolicy Bypass -File native/build-windows.ps1`, producing `native/win-x64/matchbonus.dll` (requires x64 MinGW-w64 GCC on PATH).
-- `Directory.Build.targets` runs the appropriate build script before app/test builds and copies the library beside each output assembly. Run from the **repository root**:
-
-```bash
-dotnet build Matchmaking.sln
-dotnet test Matchmaking.sln
+# Workflow 3: both reports, including a real native C call and optional export
 dotnet run --project src/Matchmaking.App -- data/matches.csv reports
 dotnet run --project src/Matchmaking.App -- data/matches.csv reports player-report.csv
-dotnet run --project src/Matchmaking.App -- data/matches.csv A
-dotnet run --project src/Matchmaking.App -- data/invalid.csv reports
-dotnet run --project src/Matchmaking.App -- data/missing.csv reports
+
+# Failure/edge demonstrations
+dotnet run --project src/Matchmaking.App -- data/empty.csv both
+dotnet run --project src/Matchmaking.App -- data/invalid.csv both
+dotnet run --project src/Matchmaking.App -- data/missing.csv both
+dotnet run --project src/Matchmaking.App -- data/matches.csv A UNKNOWN
 ```
 
-The optional third argument in `reports` mode is the export CSV filename. The app prints **both reports** and exports the player comparison when requested. `NativeBonus.Compute` is used by `ReportWorkflow.Build` on every valid input record. Missing native binaries and incorrect exports are converted into `NATIVE_LIBRARY_MISSING` / `NATIVE_ENTRY_MISSING` Result failures; wrong architecture is `NATIVE_ARCHITECTURE_MISMATCH`. A common integration difficulty is the runtime not finding the shared library; the MSBuild copy target places it beside the application/test assembly, avoiding a machine-specific global search path. The library must be built for the process architecture.
+**Native build:** `Directory.Build.targets` compiles `native/bonus.c` before application/test builds and copies the resulting shared library beside the executable/test DLL. Independently: `bash native/build-linux.sh` -> `native/linux-x64/libmatchbonus.so`, or `powershell -ExecutionPolicy Bypass -File native/build-windows.ps1` -> `native/win-x64/matchbonus.dll`. C# `[DllImport("matchbonus", EntryPoint="mm_bonus", CallingConvention=Cdecl)]` passes three signed 32-bit integers and receives one signed 32-bit integer; C uses 64-bit intermediates to avoid overflow. No unmanaged memory ownership or pointer release is required. Missing DLL, missing symbol, and architecture mismatches are reported as Result failures.
 
-### Reports and extensions
+If the application builds but `NATIVE_LIBRARY_MISSING` occurs, confirm the native file exists **beside** `Matchmaking.App.dll` in the output directory and has the same architecture as the process. On Windows, open the x64 Developer PowerShell or install an x64 GCC toolchain. Generated native binaries and `bin/`/`obj/` are excluded from the archive and reproduced by the build commands.
 
-**Report 1: Player comparison.** Input: actual CSV matches validated and rated using Policy A, with a native bonus for each match. Intended user: player comparing outcomes. Filter: `NewMmr >= minimumMmr` (the app uses 0). Output: PlayerId, NewMmr, Rank, NativeBonus, Score25, Score40. LINQ stages: `Where`, `Select`, `OrderByDescending`, `ThenBy`. Sort: MMR descending, then PlayerId ascending. Expected example: a winning match with kills=5, deaths=2 gets Score25=28 and Score40=43; native bonus=6.
+## Sample results (calculated expectations; verify by running)
 
-**Report 2: Rank distribution.** Input: the same completed entries. Intended user: matchmaking administrator. Filter: accepted valid matches. Output: Rank, Players, TotalNewMmr, TotalNativeBonus. LINQ stages: `GroupBy`, `Select`, `Count`, `Sum`, `OrderByDescending`, `ThenBy`. Sort: total MMR descending, then rank enum ascending. Example: two Gold players with MMR 1500 and 1400, bonuses 6 and 4, yield Gold/2/2900/10.
+`data/matches.csv` contains six rows, of which P004 (duration 2 minutes) and P005 (negative kills) are skipped in bulk workflows; four rows are accepted.
 
-**Extension 1:** `WithMinimumMmr(this IEnumerable<ReportEntry>, int)` returns a deferred `IEnumerable<ReportEntry>`. It belongs on a queryable sequence because it expresses a reusable, composable domain filter.
+**Policy A:** P006 2018 Platinum (+28), P001 1508 Gold (+28), P002 1492 Silver (-28), P003 1015 Silver (+25).  
+**Policy B:** P006 2058 Platinum (+68), P002 1510 Gold (-10), P001 1507 Gold (+27), P003 991 Bronze (+1).
 
-**Extension 2:** `ToRankTotals(this IEnumerable<ReportEntry>)` returns `ImmutableArray<RankTotal>`. It belongs on the sequence because it summarises that collection into rank totals. Both extensions are invoked by report methods used in the console app.
+**Pairing with Policy A and gap 100:** `P002 (1492) + P001 (1508), gap 16`. P003 (1015) and P006 (2018) remain waiting.
 
-**Currying:** `CreateScore(int winWeight)` returns `Func<MatchRecord,int>`. Partial application `CreateScore(25)` and `CreateScore(40)` creates two independent functions used on the same input in Report 1, without mutable global settings. On a winning match with kills=5, deaths=2 the outputs are 28 and 43.
+**Player comparison under Policy A:** Native bonuses are P006 +30, P001 +10, P002 -12, P003 0. Two separately configured curried functions (`CreateScore(25)` and `(40)`) provide different scores on the same match: P001 -> 28 and 43. Rows sort by new MMR descending and PlayerId ascending.
 
-### Deferred execution and resource ownership
+**Rank distribution:** Silver: 2 players, total MMR 2507, total native bonus -12; Gold: 1 player, MMR 1508, bonus +10; Platinum: 1 player, MMR 2018, bonus +30. Rows sort by total MMR descending, then rank.
 
-`MatchReports.StreamRankedEntries` uses `yield return` to defer filtering until enumeration. Merely constructing the enumerable does not process records. The app calls `ToArray()` exactly once after constructing the stream; both reports then reuse that snapshot. Before materialisation, enumerating the deferred sequence again repeats the filter and traverses its source; afterwards, enumerating the array does not rerun the query. The xUnit counter probe verifies this timing without introducing side effects into production logic.
+## Architecture and evidence map
 
-`CsvDataLoader.Load` uses `File.ReadAllLines`, a convenience API that internally opens and closes its file handle, returning an in-memory snapshot. This avoids yielding values from a disposed reader. Report export uses `using var StreamWriter` in the console layer; the app owns and disposes it on success and exceptions. The tests verify file handles can be reopened exclusively after both normal and exceptional disposal. A failed batch returns a Result failure without exposing partially constructed report rows.
+| Requirement | Implementation / integration |
+|---|---|
+| Pure immutable models, pattern decisions | `Models.cs` records; `MatchWorkflow.cs` state pattern matching; `PairingPlanner.cs` results |
+| Three named pipeline stages | `Stages.FilterValidMatches` → `Stages.ApplyMmrPolicy` → `Stages.BuildPlayerResults`, composed by `MatchmakingPipeline.Run` and used in `Program.cs` |
+| Higher-order configurable rules | `MatchmakingPipeline.Run(..., Func<MatchRecord,int>)`, invoked for Policies A/B; `RatingPolicies.cs` |
+| Safe temporal ordering | `ValidatedMatch.Create` and `MatchWorkflow` (Pending → Confirmed → Completed); invalid transitions rejected |
+| Functional failures; Map/Bind | `Result.cs`, `RatingWorkflow.RatePlayer`; `INVALID_MATCH`, `INVALID_TRANSITION`, `PLAYER_NOT_FOUND`, `DUPLICATE_PLAYER`, `INVALID_PAIR_GAP` |
+| Missing lookup | `RatingWorkflow.FindPlayer` returns `Option.Some/None` |
+| Two extensions, two LINQ reports | `MatchReports.cs` (`WithMinimumMmr`, `ToRankTotals`, `PlayerComparison`, `RankDistribution`) |
+| Currying and partial application | `MatchReports.CreateScore(25)` and `CreateScore(40)` used by console reports |
+| Lazy query and materialisation | `MatchReports.StreamRankedEntries` (`yield return`); one `ToArray()` snapshot in console before both reports |
+| Persistence and boundary errors | `CsvDataLoader.Load` (CSV), console export with `using StreamWriter`; `data/*.csv` |
+| Native C interop | `native/bonus.c`, `native/bonus.h`, build scripts, `NativeBonus.Compute` and report workflow |
+| Automated tests | `PipelineTests.cs`, `WorkflowTests.cs`, `ResultWorkflowTests.cs`, `Assignment8Tests.cs`, `PairingTests.cs` |
 
-**Retention and allocation:** `ReportWorkflow.Build` materialises the input once into an immutable array and builds a result snapshot; `StreamRankedEntries` can retain a reference to its source until enumeration completes, so the app materialises once and releases the iterator. Report arrays remain in scope only during display/export. No persistent caches, event subscriptions or long-lived collections are used. Streaming can reduce temporary memory, while snapshots make repeated report queries deterministic and prevent repeated input reads. The native function uses scalar arguments and allocates no native memory; there is no native handle to release.
+## Test coverage and verification status
 
-### Assignment 8 test coverage and current status
+The xUnit suite contains pure pipeline/rank/validation tests, safe sequence and failure-propagation tests, normal/error workflow tests, LINQ extension/aggregation and lazy-evaluation tests, **real P/Invoke** tests, paired-player cases, missing/malformed file tests, and writer disposal tests for success/failure. Run `dotnet test Matchmaking.sln` from a clean extraction; its output is the authoritative pass/fail summary.
 
-`tests/Matchmaking.Tests/Assignment8Tests.cs` adds **18 xUnit tests**: both extension methods; grouping and totals; deterministic tie-breaking; empty and no-match reports; two configured functions; lazy timing and snapshot reuse; actual native calculation and clamp; invalid native input; simulated missing native library; successful full workflow; failed workflow without partial results; invalid match blocking native invocation; StreamWriter disposal on success and exception; missing and malformed file boundaries. Previous Assignment 5–7 tests remain.
+**Verification:** GitHub Actions built the full .NET 8 solution successfully with **0 errors**, executed **66 tests successfully**, and successfully ran the rating, pairing and native-report commands on Ubuntu Linux. See [run #43518995851](https://github.com/Papgew/Matchmaking-IFP/actions/runs/43518995851). GCC locally also compiled `native/bonus.c`: independent native calls returned **16**, **30**, and **-30** for the expected cases. A local Windows x64 build still needs checking on the student’s machine.
 
-**Latest verification:** the C library compiled with GCC 14.2.0 on Linux x86-64 and a real `ctypes` call returned the manually expected 16. The .NET SDK is not installed in the authoring environment, so `dotnet build` and `dotnet test` have **not** been executed here; run them locally and record the results before submission. Generated `bin/`, `obj/`, `native/linux-x64/` and `native/win-x64/` binaries are reproducible outputs; include the sources and build scripts in a submitted ZIP.
+## Submission and responsibility
 
-**Contribution:** Altybayev Aldiyar — project owner. Assignment 8 implementation and test files are listed above; verify and be prepared to explain each part during the individual defense.
+- Project owner listed in the repository: **Altybayev Aldiyar**, student group **[fill in]**. No other contributor is asserted.
+- Individual work to verify with the owner before defense: pipeline/rules (`Stages.cs`, `RatingPolicies.cs`), state/result workflows (`MatchWorkflow.cs`, `RatingWorkflow.cs`), reports/native interop (`MatchReports.cs`, `NativeBonus.cs`, `native/*`), matchmaking pairs (`PairingPlanner.cs`), tests, and documentation. Provide accurate ownership after checking the commit history and any external assistance.
+- Include this Git-tracked source snapshot, sample CSV and test project in the Moodle code ZIP **without `bin/`, `obj/`, native build outputs, or secrets**. Upload the **group report** and the **individual contribution report** separately as DOCX/PDF. The reports are distributed alongside the ZIP; their content should reference the actual code commit shown by `git rev-parse HEAD`.
+- During defense: demonstrate rating both policies, pairing with a boundary gap, report export with real C function, malformed-file failure, state rejection, and the test suite; prepare to modify one threshold and corresponding test.
+- AI assistance may have been used in implementation/document preparation. Follow the course syllabus: **obtain instructor permission and acknowledge AI use** if applicable; the student must personally understand, verify and defend every submitted component.
+
+### Known limitations
+
+This is a deterministic batch CLI, not a persistent player-account database. Each CSV row represents one player's match in the current batch; pairing requires unique PlayerIds. The pairing algorithm is greedy, not globally optimal, and reports native bonuses rather than automatically adding them to MMR. Native build requires a compatible C compiler. Ubuntu CI compilation, all 66 tests and all workflows passed; Windows native build still needs verification in its own environment.

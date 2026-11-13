@@ -8,41 +8,50 @@ public sealed record PlayerReportRow(string PlayerId, int NewMmr, Rank Rank, int
 
 public static class MatchReportExtensions
 {
-    // Receiver is a domain query: filtering remains composable and deferred.
+    // Deferred, reusable domain filter.
     public static IEnumerable<ReportEntry> WithMinimumMmr(this IEnumerable<ReportEntry> entries, int minimum) =>
-        entries.Where(e => e.Rating.NewMmr >= minimum);
+        entries.Where(entry => entry.Rating.NewMmr >= minimum);
 
-    // Receiver is a domain query: converts matches into reusable rank aggregates.
+    // Deliberate materialisation of grouped and aggregated domain values.
     public static ImmutableArray<RankTotal> ToRankTotals(this IEnumerable<ReportEntry> entries) =>
-        entries.GroupBy(e => e.Rating.Rank)
-            .Select(g => new RankTotal(g.Key, g.Count(), g.Sum(x => x.Rating.NewMmr), g.Sum(x => x.NativeBonus)))
-            .OrderByDescending(g => g.TotalNewMmr)
-            .ThenBy(g => g.Rank)
+        entries.GroupBy(entry => entry.Rating.Rank)
+            .Select(group => new RankTotal(group.Key, group.Count(),
+                group.Sum(item => item.Rating.NewMmr), group.Sum(item => item.NativeBonus)))
+            .OrderByDescending(total => total.TotalNewMmr)
+            .ThenBy(total => total.Rank)
             .ToImmutableArray();
 }
 
 public static class MatchReports
 {
-    // Currying: configuration is fixed first; a match is supplied later.
+    // Partially apply winWeight to obtain a match-scoring function.
     public static Func<MatchRecord, int> CreateScore(int winWeight) =>
-        match => (match.IsWin ? winWeight : -winWeight) + Math.Clamp(match.Kills - match.Deaths, -3, 3);
+        match => (match.IsWin ? winWeight : -winWeight) +
+                 Math.Clamp(match.Kills - match.Deaths, -3, 3);
 
-    // Report 1: useful to players comparing their rating and two configured scores.
+    // Report 1: per-player rating and two configured score calculations.
     public static ImmutableArray<PlayerReportRow> PlayerComparison(
         IEnumerable<ReportEntry> entries, int minimumMmr,
         Func<MatchRecord, int> scoreA, Func<MatchRecord, int> scoreB) =>
         entries.WithMinimumMmr(minimumMmr)
-            .Select(e => new PlayerReportRow(e.Match.PlayerId, e.Rating.NewMmr,
-                e.Rating.Rank, e.NativeBonus, scoreA(e.Match), scoreB(e.Match)))
-            .OrderByDescending(e => e.NewMmr)
-            .ThenBy(e => e.PlayerId, StringComparer.Ordinal)
+            .Select(entry => new PlayerReportRow(entry.Match.PlayerId, entry.Rating.NewMmr,
+                entry.Rating.Rank, entry.NativeBonus, scoreA(entry.Match), scoreB(entry.Match)))
+            .OrderByDescending(row => row.NewMmr)
+            .ThenBy(row => row.PlayerId, StringComparer.Ordinal)
             .ToImmutableArray();
 
-    // Report 2: useful to administrators monitoring rank distribution.
+    // Report 2: grouped rank distribution for administrators.
     public static ImmutableArray<RankTotal> RankDistribution(IEnumerable<ReportEntry> entries) =>
         entries.ToRankTotals();
 
-    // Deferred filter for report values; callers can materialise once for multiple reports.\n    public static IEnumerable<ReportEntry> StreamRankedEntries(IEnumerable<ReportEntry> entries, int minimumMmr)\n    {\n        foreach (var entry in entries)\n            if (entry.Rating.NewMmr >= minimumMmr)\n                yield return entry;\n    }\n\n
+    // Building the iterator does not read any entries until enumerated.
+    public static IEnumerable<ReportEntry> StreamRankedEntries(
+        IEnumerable<ReportEntry> entries, int minimumMmr)
+    {
+        foreach (var entry in entries)
+            if (entry.Rating.NewMmr >= minimumMmr)
+                yield return entry;
+    }
 }
 
 public static class ReportWorkflow
@@ -51,7 +60,10 @@ public static class ReportWorkflow
         IEnumerable<MatchRecord> records, Func<MatchRecord, int> policy,
         Func<int, int, int, Result<int>> nativeBonus)
     {
-        // Snapshot prevents repeat enumeration of a potentially external source.
+        ArgumentNullException.ThrowIfNull(records);
+        ArgumentNullException.ThrowIfNull(policy);
+        ArgumentNullException.ThrowIfNull(nativeBonus);
+
         var snapshot = records.ToImmutableArray();
         var builder = ImmutableArray.CreateBuilder<ReportEntry>();
         foreach (var match in snapshot)
@@ -60,9 +72,11 @@ public static class ReportWorkflow
             if (rated is Result<PlayerMatchResult>.Failure failed)
                 return new Result<ImmutableArray<ReportEntry>>.Failure(failed.Error);
             var rating = ((Result<PlayerMatchResult>.Success)rated).Value;
+
             var bonus = nativeBonus(match.Kills, match.Deaths, 2);
             if (bonus is Result<int>.Failure nativeFailed)
                 return new Result<ImmutableArray<ReportEntry>>.Failure(nativeFailed.Error);
+
             builder.Add(new ReportEntry(match, rating, ((Result<int>.Success)bonus).Value));
         }
         return Result<ImmutableArray<ReportEntry>>.Ok(builder.ToImmutable());

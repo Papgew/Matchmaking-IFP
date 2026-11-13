@@ -1,0 +1,31 @@
+name: Final project verification
+
+on:
+  push:
+    branches: [final-project]
+  pull_request:
+    branches: [master]
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Verify C compiler
+        run: gcc --version
+      - name: Restore
+        run: dotnet restore Matchmaking.sln
+      - name: Build
+        run: dotnet build Matchmaking.sln --configuration Release --no-restore
+      - name: Test
+        run: dotnet test Matchmaking.sln --configuration Release --no-build --verbosity normal
+      - name: Rating workflow
+        run: dotnet run --project src/Matchmaking.App --configuration Release --no-build -- data/matches.csv both
+      - name: Pairing workflow
+        run: dotnet run --project src/Matchmaking.App --configuration Release --no-build -- data/matches.csv pairs A 100
+      - name: Native analytics workflow
+        run: dotnet run --project src/Matchmaking.App --configuration Release --no-build -- data/matches.csv reports
