@@ -6,7 +6,8 @@
 **Repository:** https://github.com/Papgew/Matchmaking-IFP  
 **Final submission branch:** `final-project`  
 **Final commit:** use `git rev-parse HEAD` on the submitted branch; the exact SHA is also included in the submitted group report.  
-**Platform:** .NET 8.0 SDK and C compiler for the native component.
+**Platform:** .NET 8.0 SDK and C compiler for the native component.  
+**Verified CI code commit:** `ba64487549c232d7cbde3b27a11815acadab2a21` ([GitHub Actions run](https://github.com/Papgew/Matchmaking-IFP/actions/runs/43518995851)).
 
 ## Overview
 
@@ -95,7 +96,7 @@ If the application builds but `NATIVE_LIBRARY_MISSING` occurs, confirm the nativ
 
 The xUnit suite contains pure pipeline/rank/validation tests, safe sequence and failure-propagation tests, normal/error workflow tests, LINQ extension/aggregation and lazy-evaluation tests, **real P/Invoke** tests, paired-player cases, missing/malformed file tests, and writer disposal tests for success/failure. Run `dotnet test Matchmaking.sln` from a clean extraction; its output is the authoritative pass/fail summary.
 
-**Verification at preparation time:** `gcc` compiled `native/bonus.c` to a Linux x86-64 shared library; invoking `mm_bonus(10,2,2)` returned **16**, and clamp cases returned **30** and **-30**. A .NET SDK was not available in the authoring environment, so C# build and xUnit results **have not been verified there**. Record actual local build/test output and resolve any issues before final submission. Do not present inferred results as completed tests.
+**Verification:** GitHub Actions built the full .NET 8 solution successfully with **0 errors**, executed **66 tests successfully**, and successfully ran the rating, pairing and native-report commands on Ubuntu Linux. See [run #43518995851](https://github.com/Papgew/Matchmaking-IFP/actions/runs/43518995851). GCC locally also compiled `native/bonus.c`: independent native calls returned **16**, **30**, and **-30** for the expected cases. A local Windows x64 build still needs checking on the student’s machine.
 
 ## Submission and responsibility
 
@@ -107,4 +108,4 @@ The xUnit suite contains pure pipeline/rank/validation tests, safe sequence and 
 
 ### Known limitations
 
-This is a deterministic batch CLI, not a persistent player-account database. Each CSV row represents one player's match in the current batch; pairing requires unique PlayerIds. The pairing algorithm is greedy, not globally optimal, and reports native bonuses rather than automatically adding them to MMR. Native build requires a local compatible C compiler. CI compilation/tests and Windows native build still require validation in their respective environments.
+This is a deterministic batch CLI, not a persistent player-account database. Each CSV row represents one player's match in the current batch; pairing requires unique PlayerIds. The pairing algorithm is greedy, not globally optimal, and reports native bonuses rather than automatically adding them to MMR. Native build requires a compatible C compiler. Ubuntu CI compilation, all 66 tests and all workflows passed; Windows native build still needs verification in its own environment.
