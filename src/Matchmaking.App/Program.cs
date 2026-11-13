@@ -1,112 +1,189 @@
+using System.Collections.Immutable;
+using System.Globalization;
 using Matchmaking.Core;
 
+if (args.Length > 0 && args[0] is "--help" or "-h")
+{
+    PrintUsage();
+    return 0;
+}
+
+// Run from the repository root. All paths are explicit or relative to the working directory.
 var path = args.Length > 0 ? args[0] : "data/matches.csv";
-var mode = args.Length > 1 ? args[1] : "both";
-var playerId = args.Length > 2 ? args[2] : null;
+var mode = args.Length > 1 ? args[1].ToLowerInvariant() : "both";
 
 var loaded = CsvDataLoader.Load(path);
 if (loaded is Result<IReadOnlyList<MatchRecord>>.Failure fileFailure)
 {
-    Console.Error.WriteLine($"{fileFailure.Error.Code}: {fileFailure.Error.Message}");
+    PrintError(fileFailure.Error);
     return 1;
 }
-var records = ((Result<IReadOnlyList<MatchRecord>>.Success)loaded).Value;
 
-// Assignment 8: reports use real parsed CSV records, native bonus, and two configured scores.
-if (mode.Equals("reports", StringComparison.OrdinalIgnoreCase))
+var source = ((Result<IReadOnlyList<MatchRecord>>.Success)loaded).Value;
+var playable = Stages.FilterValidMatches(source);
+foreach (var record in source.Where(record => !Stages.IsPlayableMatch(record)))
 {
-    var built = ReportWorkflow.Build(Stages.FilterValidMatches(records), RatingPolicies.WinLoss, NativeBonus.Compute);
-    if (built is Result<System.Collections.Immutable.ImmutableArray<ReportEntry>>.Failure failed)
-    {
-        Console.Error.WriteLine($"{failed.Error.Code}: {failed.Error.Message}");
-        return 1;
-    }
-
-    var entries = MatchReports.StreamRankedEntries(\n        ((Result<System.Collections.Immutable.ImmutableArray<ReportEntry>>.Success)built).Value, 0)\n        .ToArray(); // One stable snapshot reused by both reports.
-    var scoreA = MatchReports.CreateScore(25);
-    var scoreB = MatchReports.CreateScore(40);
-    var players = MatchReports.PlayerComparison(entries, 0, scoreA, scoreB);
-    var ranks = MatchReports.RankDistribution(entries);
-
-    Console.WriteLine("=== Player comparison (Policy A, native bonus, two configured scores) ===");
-    foreach (var p in players)
-        Console.WriteLine($"{p.PlayerId}: MMR={p.NewMmr}, Rank={p.Rank}, NativeBonus={p.NativeBonus}, Score25={p.ScoreA}, Score40={p.ScoreB}");
-
-    Console.WriteLine("=== Rank distribution ===");
-    foreach (var rank in ranks)
-        Console.WriteLine($"{rank.Rank}: Players={rank.Players}, TotalMMR={rank.TotalNewMmr}, TotalNativeBonus={rank.TotalNativeBonus}");
-
-    // Optional export is owned by the app; writer is disposed even when writing fails.
-    if (args.Length > 2)
-    {
-        try
-        {
-            using var writer = new StreamWriter(args[2], false);
-            writer.WriteLine("PlayerId,NewMmr,Rank,NativeBonus,Score25,Score40");
-            foreach (var p in players)
-                writer.WriteLine($"{p.PlayerId},{p.NewMmr},{p.Rank},{p.NativeBonus},{p.ScoreA},{p.ScoreB}");
-            Console.WriteLine($"Saved player report to {args[2]}");
-        }
-        catch (IOException ex)
-        {
-            Console.Error.WriteLine($"REPORT_IO_ERROR: {ex.Message}");
-            return 1;
-        }
-        catch (UnauthorizedAccessException ex)
-        {
-            Console.Error.WriteLine($"REPORT_ACCESS_DENIED: {ex.Message}");
-            return 1;
-        }
-    }
-    return 0;
+    if (ValidatedMatch.Create(record) is ValidationOutcome.Invalid invalid)
+        Console.Error.WriteLine($"SKIPPED {record.PlayerId}: {invalid.Reason}");
 }
 
-var names = mode.Equals("both", StringComparison.OrdinalIgnoreCase)
-    ? new[] { "A", "B" }
-    : new[] { mode };
-
-foreach (var name in names)
+switch (mode)
 {
-    if (!PolicySelector.TryGet(name, out var policy))
+    case "reports":
     {
-        Console.Error.WriteLine($"UNKNOWN_POLICY: '{name}'. Use A, B or both.");
+        if (args.Length > 3) { PrintUsage(); return 2; }
+        var built = ReportWorkflow.Build(playable, RatingPolicies.WinLoss, NativeBonus.Compute);
+        if (built is Result<ImmutableArray<ReportEntry>>.Failure failure)
+        {
+            PrintError(failure.Error);
+            return 1;
+        }
+
+        // Lazy query is enumerated once. Both reports use a stable snapshot.
+        var entries = MatchReports.StreamRankedEntries(
+            ((Result<ImmutableArray<ReportEntry>>.Success)built).Value, 0).ToArray();
+        var score25 = MatchReports.CreateScore(25);
+        var score40 = MatchReports.CreateScore(40);
+        var players = MatchReports.PlayerComparison(entries, 0, score25, score40);
+        var ranks = MatchReports.RankDistribution(entries);
+
+        Console.WriteLine("=== Player comparison: Policy A, native bonus, configured scores ===");
+        foreach (var row in players)
+            Console.WriteLine($"{row.PlayerId,-6} MMR={row.NewMmr,5} Rank={row.Rank,-9} Native={row.NativeBonus,3:+#;-#;0} Score25={row.ScoreA,3:+#;-#;0} Score40={row.ScoreB,3:+#;-#;0}");
+        Console.WriteLine("=== Rank distribution ===");
+        foreach (var rank in ranks)
+            Console.WriteLine($"{rank.Rank,-9} Players={rank.Players} TotalMMR={rank.TotalNewMmr} NativeTotal={rank.TotalNativeBonus}");
+
+        if (args.Length == 3)
+        {
+            var written = ExportReport(args[2], players);
+            if (written is Result<int>.Failure exportFailure)
+            {
+                PrintError(exportFailure.Error);
+                return 1;
+            }
+            Console.WriteLine($"Exported {players.Length} players to {args[2]}");
+        }
+        return 0;
+    }
+
+    case "pairs":
+    {
+        if (args.Length > 4) { PrintUsage(); return 2; }
+        var selected = args.Length > 2 ? args[2] : "A";
+        if (!PolicySelector.TryGet(selected, out var policy))
+        {
+            PrintError(new DomainError("UNKNOWN_POLICY", "Use policy A or B for pairing."));
+            return 2;
+        }
+        if (args.Length > 3 &&
+            !int.TryParse(args[3], NumberStyles.None, CultureInfo.InvariantCulture, out _))
+        {
+            PrintError(new DomainError("INVALID_PAIR_GAP", "Maximum MMR gap must be a nonnegative integer."));
+            return 2;
+        }
+        var gap = args.Length > 3 ? int.Parse(args[3], CultureInfo.InvariantCulture) : 100;
+        var proposed = PairingPlanner.Create(playable, policy, gap);
+        if (proposed is Result<PairingPlan>.Failure failure)
+        {
+            PrintError(failure.Error);
+            return 1;
+        }
+        var plan = ((Result<PairingPlan>.Success)proposed).Value;
+        Console.WriteLine($"=== Player pairs (policy {selected.ToUpperInvariant()}, max gap {gap}) ===");
+        foreach (var pair in plan.Pairs)
+            Console.WriteLine($"{pair.PlayerA} ({pair.MmrA}) + {pair.PlayerB} ({pair.MmrB}); gap={pair.Difference}");
+        Console.WriteLine($"Pairs: {plan.Pairs.Length}, waiting: {plan.Waiting.Length}");
+        foreach (var waiting in plan.Waiting)
+            Console.WriteLine($"Waiting: {waiting.PlayerId}, MMR={waiting.NewMmr}");
+        return 0;
+    }
+
+    case "a":
+    case "b":
+    case "both":
+    {
+        if (args.Length > 3) { PrintUsage(); return 2; }
+        var policies = mode == "both" ? new[] { "A", "B" } : new[] { mode.ToUpperInvariant() };
+        foreach (var name in policies)
+        {
+            if (!PolicySelector.TryGet(name, out var policy))
+                return 2;
+
+            if (args.Length == 3)
+            {
+                // Lookup explicitly uses Option, then Map/Bind with the safe state workflow.
+                var rated = RatingWorkflow.RatePlayer(source, args[2], policy);
+                if (rated is Result<PlayerMatchResult>.Failure failure)
+                {
+                    PrintError(failure.Error);
+                    return 1;
+                }
+                PrintRatings(name, new[] { ((Result<PlayerMatchResult>.Success)rated).Value });
+            }
+            else
+            {
+                // Assignment 5's named pipeline is used in the real application.
+                // Stage 1 filters invalid domain records; stages 2/3 rate and rank.
+                var rated = MatchmakingPipeline.Run(source, policy);
+                PrintRatings(name, rated);
+            }
+        }
+        return 0;
+    }
+
+    default:
+        PrintError(new DomainError("UNKNOWN_MODE", "Use A, B, both, reports, or pairs."));
+        PrintUsage();
         return 2;
-    }
+}
 
-    if (playerId is not null)
+static Result<int> ExportReport(string outputPath, IEnumerable<PlayerReportRow> rows)
+{
+    try
     {
-        var single = RatingWorkflow.RatePlayer(records, playerId, policy);
-        switch (single)
+        using var writer = new StreamWriter(outputPath, false);
+        writer.WriteLine("PlayerId,NewMmr,Rank,NativeBonus,Score25,Score40");
+        var count = 0;
+        foreach (var row in rows)
         {
-            case Result<PlayerMatchResult>.Failure failure:
-                Console.Error.WriteLine($"{failure.Error.Code}: {failure.Error.Message}");
-                return 1;
-            case Result<PlayerMatchResult>.Success success:
-                PrintResults(name, new[] { success.Value });
-                break;
+            writer.WriteLine($"{row.PlayerId},{row.NewMmr},{row.Rank},{row.NativeBonus},{row.ScoreA},{row.ScoreB}");
+            count++;
         }
+        return Result<int>.Ok(count);
     }
-    else
+    catch (UnauthorizedAccessException ex)
     {
-        var all = RatingWorkflow.RateAll(records, policy);
-        switch (all)
-        {
-            case Result<System.Collections.Immutable.ImmutableArray<PlayerMatchResult>>.Failure failure:
-                Console.Error.WriteLine($"{failure.Error.Code}: {failure.Error.Message}");
-                return 1;
-            case Result<System.Collections.Immutable.ImmutableArray<PlayerMatchResult>>.Success success:
-                PrintResults(name, success.Value);
-                break;
-        }
+        return Result<int>.Fail("REPORT_ACCESS_DENIED", ex.Message);
+    }
+    catch (IOException ex)
+    {
+        return Result<int>.Fail("REPORT_IO_ERROR", ex.Message);
+    }
+    catch (ArgumentException ex)
+    {
+        return Result<int>.Fail("REPORT_INVALID_PATH", ex.Message);
     }
 }
-return 0;
 
-static void PrintResults(string policyName, IEnumerable<PlayerMatchResult> results)
+static void PrintRatings(string policyName, IEnumerable<PlayerMatchResult> results)
 {
     Console.WriteLine($"=== Policy {policyName.ToUpperInvariant()} ===");
     Console.WriteLine($"{"Player",-8}{"Old",6}{"Delta",7}{"New",6}  Rank");
-    foreach (var r in results)
-        Console.WriteLine($"{r.PlayerId,-8}{r.OldMmr,6}{r.MmrDelta,7:+#;-#;0}{r.NewMmr,6}  {r.Rank}");
+    foreach (var row in results)
+        Console.WriteLine($"{row.PlayerId,-8}{row.OldMmr,6}{row.MmrDelta,7:+#;-#;0}{row.NewMmr,6}  {row.Rank}");
     Console.WriteLine();
+}
+
+static void PrintError(DomainError error) =>
+    Console.Error.WriteLine($"{error.Code}: {error.Message}");
+
+static void PrintUsage()
+{
+    Console.WriteLine("Matchmaking & Skill Rating (.NET 8)");
+    Console.WriteLine("Run from the repository root:");
+    Console.WriteLine("  dotnet run --project src/Matchmaking.App -- data/matches.csv both");
+    Console.WriteLine("  dotnet run --project src/Matchmaking.App -- data/matches.csv A P001");
+    Console.WriteLine("  dotnet run --project src/Matchmaking.App -- data/matches.csv pairs A 100");
+    Console.WriteLine("  dotnet run --project src/Matchmaking.App -- data/matches.csv reports player-report.csv");
 }
