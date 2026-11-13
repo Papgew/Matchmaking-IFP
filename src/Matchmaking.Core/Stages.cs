@@ -7,7 +7,9 @@ public static class Stages
     public const double MinMatchMinutes = 3.0;
 
     public static bool IsPlayableMatch(MatchRecord m) =>
-        m.MatchDurationMinutes >= MinMatchMinutes
+        !string.IsNullOrWhiteSpace(m.PlayerId)
+        && double.IsFinite(m.MatchDurationMinutes)
+        && m.MatchDurationMinutes >= MinMatchMinutes
         && m.Kills >= 0
         && m.Deaths >= 0
         && m.CurrentMmr >= 0;
@@ -28,7 +30,7 @@ public static class Stages
             .Select(m =>
             {
                 var delta = policy(m);
-                return new RatedMatch(m, delta, Math.Max(0, m.CurrentMmr + delta));
+                return new RatedMatch(m, delta, (int)Math.Clamp((long)m.CurrentMmr + delta, 0L, int.MaxValue));
             })
             .ToImmutableArray();
     }
