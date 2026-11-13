@@ -159,12 +159,13 @@ public class Assignment8Tests
         var path = Path.Combine(Path.GetTempPath(), $"a8-{Guid.NewGuid():N}.csv");
         try
         {
-            Assert.Throws<InvalidOperationException>(() =>
+            Action writeAndThrow = () =>
             {
                 using var writer = new StreamWriter(path);
                 writer.WriteLine("test");
                 throw new InvalidOperationException("simulated error");
-            });
+            };
+            Assert.Throws<InvalidOperationException>(writeAndThrow);
             using (var stream = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
                 Assert.True(stream.Length > 0);
         }
